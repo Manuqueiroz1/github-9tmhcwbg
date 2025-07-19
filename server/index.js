@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Add error handling for missing dependencies
+// Tratamento de erros para exceções não capturadas
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
   process.exit(1);
@@ -18,31 +18,52 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const app = express();
+// CRÍTICO: Railway fornece porta via variável de ambiente
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
+// CORS configurado para Railway - usa variável de ambiente para flexibilidade
+app.use(cors({
+  origin: [
+    process.env.FRONTEND_URL, // URL do frontend no Railway (configure como variável)
+    'http://localhost:5173',  // Para desenvolvimento local (Vite)
+    'http://localhost:3000',  // Para desenvolvimento local (React)
+    'http://localhost:4173'   // Para preview do Vite
+  ],
+  credentials: true
+}));
+
 app.use(express.json());
 
-// In-memory database simulation (replace with real database)
+// Simulação de banco de dados em memória
 const users = new Map();
 const purchases = new Map();
 
-// Hotmart webhook endpoint
+// Health check endpoint - útil para Railway monitorar o serviço
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Backend funcionando no Railway!',
+    timestamp: new Date().toISOString(),
+    status: 'healthy'
+  });
+});
+
+// Endpoint de health check específico
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Webhook da Hotmart
 app.post('/webhook/hotmart', async (req, res) => {
   try {
     const { event, data } = req.body;
     
-    // Validate webhook signature (implement according to Hotmart docs)
-    // const signature = req.headers['x-hotmart-signature'];
-    // if (!validateHotmartSignature(signature, req.body)) {
-    //   return res.status(401).json({ error: 'Invalid signature' });
-    // }
-    
     if (event === 'PURCHASE_COMPLETE' || event === 'PURCHASE_APPROVED') {
       const { buyer, purchase } = data;
       
-      // Store purchase data
       purchases.set(buyer.email.toLowerCase(), {
         email: buyer.email.toLowerCase(),
         name: buyer.name,
@@ -63,7 +84,7 @@ app.post('/webhook/hotmart', async (req, res) => {
   }
 });
 
-// Check if email has valid purchase
+// Verificar se email tem compra válida
 app.post('/api/auth/check-purchase', async (req, res) => {
   try {
     const { email } = req.body;
@@ -100,7 +121,7 @@ app.post('/api/auth/check-purchase', async (req, res) => {
   }
 });
 
-// Create password for first-time user
+// Criar senha para usuário novo
 app.post('/api/auth/create-password', async (req, res) => {
   try {
     const { email, password, name } = req.body;
@@ -109,21 +130,17 @@ app.post('/api/auth/create-password', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
     
-    // Check if purchase exists
     const purchase = purchases.get(email.toLowerCase());
     if (!purchase) {
       return res.status(404).json({ error: 'Nenhuma compra encontrada para este e-mail' });
     }
     
-    // Check if user already exists
     if (users.has(email.toLowerCase())) {
       return res.status(409).json({ error: 'Usuário já possui senha cadastrada' });
     }
     
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
     
-    // Create user
     users.set(email.toLowerCase(), {
       email: email.toLowerCase(),
       name: name || purchase.name,
@@ -132,13 +149,12 @@ app.post('/api/auth/create-password', async (req, res) => {
       hasCompletedOnboarding: false
     });
     
-    // Generate JWT token
     const token = jwt.sign(
       { 
         email: email.toLowerCase(), 
         name: name || purchase.name 
       },
-      process.env.JWT_SECRET || 'fallback_secret',
+      process.env.JWT_SECRET || 'fallback_secret_change_in_production',
       { expiresIn: '7d' }
     );
     
@@ -158,7 +174,7 @@ app.post('/api/auth/create-password', async (req, res) => {
   }
 });
 
-// Login with existing password
+// Login com senha existente
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -167,31 +183,27 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
     
-    // Check if user exists
     const user = users.get(email.toLowerCase());
     if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
     
-    // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Senha incorreta' });
     }
     
-    // Check if purchase is still active
     const purchase = purchases.get(email.toLowerCase());
     if (!purchase || purchase.status !== 'active') {
       return res.status(403).json({ error: 'Acesso não autorizado' });
     }
     
-    // Generate JWT token
     const token = jwt.sign(
       { 
         email: user.email, 
         name: user.name 
       },
-      process.env.JWT_SECRET || 'fallback_secret',
+      process.env.JWT_SECRET || 'fallback_secret_change_in_production',
       { expiresIn: '7d' }
     );
     
@@ -211,7 +223,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Update onboarding status
+// Atualizar status de onboarding
 app.post('/api/auth/complete-onboarding', async (req, res) => {
   try {
     const { email } = req.body;
@@ -232,7 +244,7 @@ app.post('/api/auth/complete-onboarding', async (req, res) => {
   }
 });
 
-// Test endpoint to simulate a purchase (for development)
+// Endpoint de teste para simular compra
 app.post('/test/simulate-purchase', async (req, res) => {
   try {
     const { email, name } = req.body;
@@ -253,8 +265,10 @@ app.post('/test/simulate-purchase', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+// CRÍTICO: '0.0.0.0' permite acesso externo no Railway
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 Ready to receive requests`);
-  console.log(`Webhook URL: http://localhost:${PORT}/webhook/hotmart`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Webhook URL: http://0.0.0.0:${PORT}/webhook/hotmart`);
 });
