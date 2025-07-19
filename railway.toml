@@ -1,0 +1,15 @@
+[[services]]
+name = "backend"
+source = "server/"
+
+[services.build]
+buildCommand = "npm install"
+startCommand = "node index.js"
+
+[[services]]
+name = "frontend"
+source = "./"
+
+[services.build]
+buildCommand = "npm install && npm run build"
+startCommand = "python3 -m http.server $PORT --directory dist"
